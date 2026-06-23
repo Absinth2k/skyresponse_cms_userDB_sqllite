@@ -30,14 +30,14 @@ public class Main {
         scheduler.scheduleAtFixedRate(() -> {
             try {
                 System.out.println("\n==============================");
-                System.out.println("🚀 Start Import: " + LocalDateTime.now());
+                System.out.println("Start Import: " + LocalDateTime.now());
 
                 runImport();
 
-                System.out.println("✅ Import fertig");
+                System.out.println("Import fertig");
 
             } catch (Exception e) {
-                System.out.println("❌ Fehler im Import:");
+                System.out.println("Fehler im Import:");
                 e.printStackTrace();
             }
         }, 0, 1, TimeUnit.MINUTES);
@@ -45,7 +45,7 @@ public class Main {
 
     private static void runImport() throws Exception {
 
-        // 🔐 besser über Environment Variables
+       // Credentials einfügen !!!!
         String username = "USER";
         String password = "PASSWORD";
 
@@ -53,9 +53,8 @@ public class Main {
             throw new RuntimeException("Missing env vars SKY_USER / SKY_PASS");
         }
 
-        // =========================
-        // 1. TOKEN
-        // =========================
+        // 1. TOKEN holen
+
         String form = "grant_type=password"
                 + "&username=" + username
                 + "&password=" + password;
@@ -71,9 +70,8 @@ public class Main {
         String token = mapper.readTree(tokenRes.body())
                 .get("access_token").asText();
 
-        // =========================
         // 2. REPORT GENERIEREN
-        // =========================
+
         String payload = """
         {
           "language":"de-DE-x-care-curena",
@@ -101,9 +99,8 @@ public class Main {
 
         String fileId = genRes.body().replace("\"", "").trim();
 
-        // =========================
         // 3. DOWNLOAD POLLING
-        // =========================
+
         String downloadUrl = "https://admin.skyresponse.com/api/v2/reports/download/"
                 + fileId + "?language=de-DE-x-care-curena";
 
@@ -125,12 +122,12 @@ public class Main {
                 break;
             }
 
-            System.out.println("⏳ Warte auf Datei... Versuch " + (i + 1));
+            System.out.println("Warte auf Datei... Versuch " + (i + 1));
             Thread.sleep(2000);
         }
 
         if (json == null) {
-            System.out.println("❌ Datei nicht verfügbar");
+            System.out.println("Datei nicht verfügbar");
             return;
         }
 
@@ -139,17 +136,16 @@ public class Main {
 
         Files.write(Path.of(fileName), Base64.getDecoder().decode(base64));
 
-        // =========================
+
         // 4. SQLITE
-        // =========================
+
         Connection conn = DriverManager.getConnection("jdbc:sqlite:report.db");
         Statement stmt = conn.createStatement();
 
         stmt.execute("DROP TABLE IF EXISTS report");
 
-        // =========================
         // 5. EXCEL LESEN
-        // =========================
+
         FileInputStream fis = new FileInputStream(fileName);
         Workbook workbook = new XSSFWorkbook(fis);
         Sheet sheet = workbook.getSheetAt(0);
@@ -159,9 +155,9 @@ public class Main {
 
         int cols = headerRow.getLastCellNum();
 
-        // =========================
+
         // 6. TABLE CREATE
-        // =========================
+
         StringBuilder create = new StringBuilder("CREATE TABLE report (");
 
         for (int i = 0; i < cols; i++) {
@@ -181,9 +177,9 @@ public class Main {
 
         stmt.execute(create.toString());
 
-        // =========================
+
         // 7. INSERT
-        // =========================
+
         StringBuilder insert = new StringBuilder("INSERT INTO report VALUES (");
 
         for (int i = 0; i < cols; i++) {
@@ -233,7 +229,7 @@ public class Main {
         workbook.close();
         conn.close();
 
-        System.out.println("📦 Importiert: " + inserted + " Zeilen");
+        System.out.println("Importiert: " + inserted + " Zeilen");
     }
 
     private static String safeColumnName(String input, int index) {
