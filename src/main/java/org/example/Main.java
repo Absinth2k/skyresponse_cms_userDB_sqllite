@@ -11,7 +11,13 @@ import java.net.http.*;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.sql.*;
+import java.time.LocalDate;
 import java.time.LocalDateTime;
+import java.time.LocalTime;
+import java.time.format.DateTimeFormatter;
+import java.time.format.DateTimeParseException;
+import java.util.List;
+import java.util.Locale;
 import java.util.Base64;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
@@ -21,6 +27,28 @@ public class Main {
 
     private static final ObjectMapper mapper = new ObjectMapper();
     private static final HttpClient client = HttpClient.newHttpClient();
+
+    // Spalten, deren Name einen dieser Begriffe enthält, werden als Datum behandelt
+    private static final List<String> DATE_COLUMN_HINTS =
+            List.of("geburt", "datum", "date", "birth");
+
+    private static final DateTimeFormatter DATE_TIME_OUT =
+            DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss");
+
+    private static final List<DateTimeFormatter> DATE_INPUTS = List.of(
+            DateTimeFormatter.ofPattern("d.M.uuuu"),
+            DateTimeFormatter.ofPattern("d.M.uu"),
+            DateTimeFormatter.ofPattern("uuuu-M-d"),
+            DateTimeFormatter.ofPattern("d/M/uuuu"),
+            DateTimeFormatter.ofPattern("d-M-uuuu")
+    );
+
+    private static final List<DateTimeFormatter> DATE_TIME_INPUTS = List.of(
+            DateTimeFormatter.ofPattern("d.M.uuuu H:mm[:ss]"),
+            DateTimeFormatter.ofPattern("uuuu-M-d[ ]['T']H:mm[:ss]"),
+            DateTimeFormatter.ofPattern("d/M/uuuu H:mm[:ss]"),
+            DateTimeFormatter.ofPattern("EEE MMM dd HH:mm:ss zzz uuuu", Locale.ENGLISH)
+    );
 
     public static void main(String[] args) {
 
@@ -159,6 +187,7 @@ public class Main {
         // 6. TABLE CREATE
 
         StringBuilder create = new StringBuilder("CREATE TABLE report (");
+        boolean[] dateCols = new boolean[cols];
 
         for (int i = 0; i < cols; i++) {
 
@@ -167,6 +196,7 @@ public class Main {
                     : "col" + i;
 
             String col = safeColumnName(raw, i);
+            dateCols[i] = isDateColumn(col);
 
             create.append("\"").append(col).append("\" TEXT");
 
@@ -205,7 +235,7 @@ public class Main {
             for (int i = 0; i < cols; i++) {
 
                 Cell cell = row.getCell(i);
-                String value = getCellValue(cell);
+                String value = getCellValue(cell, dateCols[i]);
 
                 if (value != null && !value.isBlank()) {
                     empty = false;
@@ -248,36 +278,75 @@ public class Main {
         return c.isBlank() ? "col" + index : c;
     }
 
-    private static String getCellValue(Cell cell) {
+    private static boolean isDateColumn(String col) {
+        return DATE_COLUMN_HINTS.stream().anyMatch(col::contains);
+    }
+
+    private static String getCellValue(Cell cell, boolean dateCol) {
 
         if (cell == null) return null;
 
         try {
-            return switch (cell.getCellType()) {
+            CellType type = cell.getCellType();
+            if (type == CellType.FORMULA) {
+                type = cell.getCachedFormulaResultType();
+            }
 
-                case STRING -> cell.getStringCellValue();
+            return switch (type) {
+
+                case STRING -> {
+                    String s = cell.getStringCellValue();
+                    yield dateCol ? normalizeDateString(s) : s;
+                }
 
                 case NUMERIC -> {
-                    if (DateUtil.isCellDateFormatted(cell)) {
-                        yield cell.getDateCellValue().toString();
+                    double v = cell.getNumericCellValue();
+                    // Datum wird auch erkannt, wenn die Zelle kein Datumsformat hat
+                    // (z.B. Seriennummer 29221 statt 01.01.1980)
+                    if (DateUtil.isCellDateFormatted(cell)
+                            || (dateCol && DateUtil.isValidExcelDate(v))) {
+                        yield formatDate(DateUtil.getLocalDateTime(v));
                     }
-                    yield String.valueOf(cell.getNumericCellValue());
+                    yield String.valueOf(v);
                 }
 
                 case BOOLEAN -> String.valueOf(cell.getBooleanCellValue());
-
-                case FORMULA -> {
-                    try {
-                        yield cell.getStringCellValue();
-                    } catch (Exception e) {
-                        yield String.valueOf(cell.getNumericCellValue());
-                    }
-                }
 
                 default -> null;
             };
         } catch (Exception e) {
             return null;
         }
+    }
+
+    // Datum im ISO-Format (yyyy-MM-dd), damit SQLite es als Datum verarbeiten kann
+    private static String formatDate(LocalDateTime dt) {
+        if (dt.toLocalTime().equals(LocalTime.MIDNIGHT)) {
+            return dt.toLocalDate().toString();
+        }
+        return dt.format(DATE_TIME_OUT);
+    }
+
+    private static String normalizeDateString(String s) {
+
+        if (s == null || s.isBlank()) return s;
+
+        String t = s.trim();
+
+        for (DateTimeFormatter f : DATE_INPUTS) {
+            try {
+                return LocalDate.parse(t, f).toString();
+            } catch (DateTimeParseException ignored) {
+            }
+        }
+
+        for (DateTimeFormatter f : DATE_TIME_INPUTS) {
+            try {
+                return formatDate(LocalDateTime.parse(t, f));
+            } catch (DateTimeParseException ignored) {
+            }
+        }
+
+        return s;
     }
 }
